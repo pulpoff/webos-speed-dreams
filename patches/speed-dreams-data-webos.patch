@@ -1,0 +1,163 @@
+diff --git a/data/drivers/human/preferences.xml b/data/drivers/human/preferences.xml
+index 84894df..b4b78a7 100644
+--- a/data/drivers/human/preferences.xml
++++ b/data/drivers/human/preferences.xml
+@@ -13,12 +13,14 @@
+ 
+ <!DOCTYPE params SYSTEM "../../libs/tgf/params.dtd">
+ 
+-<params mode="mw" type="template" name="Player Pref" version="1.9">
++<params mode="mw" type="template" name="Player Pref" version="1.10">
+ 
+   <section name="Preferences">
+ 
+-    <!-- The 'profile' = sub-section below to get the default values from -->
+-    <attstr name="control" in="mouse,joystick" val="mouse"/>
++    <!-- The 'profile' = sub-section below to get the default values from. On webOS the race
++         chooses: the game controller ("joystick") when one is connected, else the remote
++         ("keyboard"). -->
++    <attstr name="control" in="mouse,joystick,keyboard" val="joystick"/>
+ 
+     <section name="Drivers">
+ 
+@@ -29,34 +31,6 @@
+         <attstr name="ABS on" in="yes,no" val="yes"/>
+         <attstr name="ASR on" in="yes,no" val="yes"/>
+         <attnum name="programmed pit stops" val="0"/>
+-        <attnum name="steer sensitivity" val="0.6"/>
+-        <attnum name="steer dead zone" val="0.0"/>
+-        <attstr name="left steer" val="MOUSE_LEFT"/>
+-        <attnum name="left steer min" val="0"/>
+-        <attnum name="left steer max" val="319"/>
+-        <attnum name="left steer power" val="0.00315"/>
+-        <attstr name="right steer" val="MOUSE_RIGHT"/>
+-        <attnum name="right steer min" val="0"/>
+-        <attnum name="right steer max" val="319"/>
+-        <attnum name="right steer power" val="0.00315"/>
+-        <attstr name="throttle" val="Up Arrow"/>
+-        <attnum name="throttle min" val="0"/>
+-        <attnum name="throttle max" val="1"/>
+-        <attnum name="throttle power" val="0"/>
+-        <attstr name="brake" val="Down Arrow"/>
+-        <attnum name="brake min" val="0"/>
+-        <attnum name="brake max" val="1"/>
+-        <attnum name="brake power" val="0"/>
+-        <attstr name="ebrake cmd" val="Space"/>
+-        <attstr name="ASR cmd" val="t"/>
+-        <attstr name="ABS cmd" val="a"/>
+-        <attstr name="Light1 cmd" val="l"/>
+-        <attstr name="Speed Limiter" val="s"/>
+-        <attstr name="camera look behind" val="b"/>
+-        <attstr name="dashboard next item" val="u"/>
+-        <attstr name="dashboard previous item" val="j"/>
+-        <attstr name="dashboard increase" val="k"/>
+-        <attstr name="dashboard decrease" val="h"/>
+         <attnum name="WebServerId" val="none"/>
+         <attstr name="WebServerUsername" val="username"/>
+         <attstr name="WebServerPassword" val="password"/>
+@@ -70,12 +44,16 @@
+ 
+   <!-- The default values for a 'joystick' profile -->
+   <section name="joystick">
+-    <attstr name="up shift"   val="BTN1-0"/>
+-    <attstr name="down shift" val="BTN2-0"/>
+-    <attstr name="ASR cmd" val="BTN6-0"/>
+-    <attstr name="ABS cmd" val="BTN3-0"/>
+-    <attstr name="reverse gear" val="BTN4-0"/>
+-    <attstr name="neutral gear" val="BTN5-0"/>
++    <!-- webOS: a DualShock 4 through SDL's HIDAPI driver, numbered like an SDL game controller:
++         buttons Cross 1, Circle 2, Square 3, Triangle 4, Share 5, PS 6, Options 7, L3 8, R3 9,
++         L1 10, R1 11, D-pad 12-15; axes 0-1 left stick, 2-3 right stick, 4 L2, 5 R2 (-1 to 1).
++         Square, Options and Cross also act as keys (next view, the stop menu, Enter). -->
++    <attstr name="up shift"   val="BTN11-0"/>
++    <attstr name="down shift" val="BTN10-0"/>
++    <attstr name="ASR cmd" val="---"/>
++    <attstr name="ABS cmd" val="---"/>
++    <attstr name="reverse gear" val="---"/>
++    <attstr name="neutral gear" val="---"/>
+     <attstr name="1st gear" val=""/>
+     <attstr name="2nd gear" val=""/>
+     <attstr name="3rd gear" val=""/>
+@@ -86,34 +64,63 @@
+     <attstr name="sequential shifter allow neutral" in="yes,no" val="no"/>
+ 
+     <attnum name="steer sensitivity" val="0.8"/>
+-    <attnum name="steer power" val="1.0"/>
++    <attnum name="steer dead zone" val="0.08"/>
++    <attnum name="steer speed sensitivity" val="0.5"/>
+ 
+     <attstr name="left steer" val="AXIS0-0"/>
+-    <attnum name="left steer min" val="1.0"/>
+-    <attnum name="left steer max" val="-1.1"/>
++    <attnum name="left steer min" val="0"/>
++    <attnum name="left steer max" val="-1"/>
++    <attnum name="left steer power" val="-1"/>
+ 
+     <attstr name="right steer" val="AXIS0-0"/>
+-    <attnum name="right steer min" val="1.0"/>
+-    <attnum name="right steer max" val="-1.1"/>
++    <attnum name="right steer min" val="0"/>
++    <attnum name="right steer max" val="1"/>
++    <attnum name="right steer power" val="1"/>
+ 
+-    <attstr name="throttle" val="AXIS1-0"/>
+-    <attnum name="throttle min" val="1.0"/>
+-    <attnum name="throttle max" val="-1.1"/>
++    <attstr name="throttle" val="AXIS5-0"/>
++    <attnum name="throttle min" val="-1"/>
++    <attnum name="throttle max" val="1"/>
+     <attnum name="throttle sensitivity" val="1.0"/>
+-    <attnum name="throttle power" val="1.2"/>
++    <attnum name="throttle power" val="1.0"/>
+ 
+     <attstr name="brake" val="AXIS4-0"/>
+-    <attnum name="brake min" val="1.0"/>
+-    <attnum name="brake max" val="-1.1"/>
+-    <attnum name="brake sensitivity" val="0.2"/>
+-    <attnum name="brake power" val="1.2"/>
+-    <attstr name="ebrake cmd" val=""/>
++    <attnum name="brake min" val="-1"/>
++    <attnum name="brake max" val="1"/>
++    <attnum name="brake sensitivity" val="1.0"/>
++    <attnum name="brake power" val="1.0"/>
++    <!-- webOS only: a button that brakes fully, besides the trigger -->
++    <attstr name="brake button" val="BTN1-0"/>
++    <attstr name="ebrake cmd" val="BTN4-0"/>
++
++    <attstr name="clutch" val="---"/>
++    <attstr name="Light1 cmd" val="---"/>
++  </section>
+ 
+-    <attstr name="clutch" val="AXIS4-0"/>
+-    <attnum name="clutch min" val="1.0"/>
+-    <attnum name="clutch max" val="-1.1"/>
+-    <attnum name="clutch sensitivity" val="0.2"/>
+-    <attnum name="clutch power" val="1.2"/>
++  <!-- webOS: the TV remote's arrows, when no game controller is connected -->
++  <section name="keyboard">
++    <attstr name="up shift" val="---"/>
++    <attstr name="down shift" val="---"/>
++    <attstr name="ASR cmd" val="---"/>
++    <attstr name="ABS cmd" val="---"/>
++    <attstr name="reverse gear" val="---"/>
++    <attstr name="neutral gear" val="---"/>
++
++    <attnum name="steer sensitivity" val="0.6"/>
++    <attnum name="steer dead zone" val="0.0"/>
++    <attnum name="steer speed sensitivity" val="0.2"/>
++    <attstr name="left steer" val="Left Arrow"/>
++    <attstr name="right steer" val="Right Arrow"/>
++    <attstr name="throttle" val="Up Arrow"/>
++    <attnum name="throttle min" val="0"/>
++    <attnum name="throttle max" val="1"/>
++    <attnum name="throttle power" val="0"/>
++    <attstr name="brake" val="Down Arrow"/>
++    <attnum name="brake min" val="0"/>
++    <attnum name="brake max" val="1"/>
++    <attnum name="brake power" val="0"/>
++    <attstr name="ebrake cmd" val="---"/>
++    <attstr name="clutch" val="---"/>
++    <attstr name="Light1 cmd" val="---"/>
+   </section>
+ 
+   <!-- The default values for a 'mouse' profile -->

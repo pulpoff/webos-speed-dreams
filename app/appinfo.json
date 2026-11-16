@@ -1,0 +1,14 @@
+{
+  "id": "com.pulp.speeddreams",
+  "version": "0.3.0",
+  "vendor": "Pulp",
+  "type": "native",
+  "main": "speed-dreams-2",
+  "title": "Speed Dreams",
+  "icon": "icon.png",
+  "largeIcon": "largeIcon.png",
+  "iconColor": "#101418",
+  "useAllMouseButtons": true,
+  "useAllKeyboardKeys": true,
+  "cloudgame_active": true
+}

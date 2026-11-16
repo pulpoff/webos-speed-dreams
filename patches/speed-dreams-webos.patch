@@ -1,0 +1,854 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 6fa776a..b3a28df 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -51,6 +51,13 @@ set(CMAKE_INSTALL_RPATH
+ 
+ set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+ 
++if(OPTION_WEBOS)
++   # A webOS app is one folder, put anywhere: the libraries go into its lib/, next to the game,
++   # and the game's rpath (DT_RPATH, so it serves the modules too) points there.
++   set(CMAKE_INSTALL_RPATH "\$ORIGIN/lib")
++   set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
++endif(OPTION_WEBOS)
++
+ if(SD_ASSUME_DATADIR)
+    set(SD_DATADIR ${CMAKE_INSTALL_DATADIR}/games/speed-dreams-2)
+    set(SD_DATADIR_INSTALL_PREFIX ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/games/speed-dreams-2)
+diff --git a/cmake/options.cmake b/cmake/options.cmake
+index 66d72f4..0ea390d 100644
+--- a/cmake/options.cmake
++++ b/cmake/options.cmake
+@@ -74,6 +74,7 @@ MACRO(ADD_SD_COMPILE_OPTIONS)
+     IF(UNIX)
+       SET(OPTION_XRANDR true CACHE BOOL "XrandR")
+       SET(OPTION_GLEXTPROTOTYPES true CACHE BOOL "Enable prototypes in glext.h")
++      SET(OPTION_WEBOS false CACHE BOOL "Build for LG webOS TVs (OpenGL ES 2 through gl4es, no X11)")
+       #SET(OPTION_UNLOAD_SSGGRAPH true CACHE BOOL "If false, never unload ssggraph module (useful on some Linuxes to avoid XOrg crashes)")
+     ENDIF(UNIX)
+ 
+@@ -135,6 +136,10 @@ MACRO(ADD_SD_COMPILE_OPTIONS)
+       ADD_DEFINITIONS(-DUSE_RANDR_EXT)
+     ENDIF(OPTION_XRANDR)
+ 
++    IF(OPTION_WEBOS)
++      ADD_DEFINITIONS(-DWEBOS)
++    ENDIF(OPTION_WEBOS)
++
+     IF(OPTION_PROFILER)
+       ADD_DEFINITIONS(-DPROFILER)
+     ENDIF(OPTION_PROFILER)
+diff --git a/src/libs/robottools/rthumandriver.cpp b/src/libs/robottools/rthumandriver.cpp
+index 04c5968..26da9bc 100644
+--- a/src/libs/robottools/rthumandriver.cpp
++++ b/src/libs/robottools/rthumandriver.cpp
+@@ -126,6 +126,9 @@ typedef struct HumanContext
+     float		brakeRear;
+     float		brakeLeft;
+     float		brakeRight;
++#ifdef WEBOS
++    int			brakeButton;	// a game controller button that brakes fully, besides the brake axis
++#endif
+     // ... simuV4
+ 
+ } tHumanContext;
+@@ -1488,6 +1491,10 @@ static void common_drive(const int index, tCarElt* car, tSituation *s)
+         car->_brakeCmd = 0;
+         break;
+     }
++#ifdef WEBOS
++    if (HCtx[idx]->brakeButton >= 0 && joyInfo->levelup[HCtx[idx]->brakeButton])
++        car->_brakeCmd = 1.0;
++#endif
+ 
+     switch (cmd[CMD_CLUTCH].type)
+     {
+@@ -2414,8 +2421,25 @@ void HumanDriver::human_prefs(const int robot_index, int player_index)
+     if (i == 0 && !joyPresent)
+         i = 2;
+ 
++#ifdef WEBOS
++    // A TV has its remote and perhaps a game controller, but no mouse to steer with: the race
++    // reads the controller when one is connected (the "joystick" profile), else the remote's
++    // arrows (the "keyboard" profile). On webOS the player's own section carries no bindings,
++    // so the profile decides; any saved from the controls menu still override it.
++    i = GfctrlJoyNumber() > 0 ? 0 : 1;
++    GfLogInfo("webOS: player %d drives with the %s\n", player_index, i == 0 ? "game controller" : "remote");
++#endif
++
+     defaultSettings = controlList[i].settings;
+ 
++#ifdef WEBOS
++    // A pad brakes with its trigger, gently, or with a button, fully: the profile's "brake button"
++    prm = GfParmGetStr(PrefHdle, defaultSettings, "brake button", "---");
++    prm = GfParmGetStr(PrefHdle, sstring, "brake button", prm);
++    ref = GfctrlGetRefByName(prm);
++    HCtx[idx]->brakeButton = ref->type == GFCTRL_TYPE_JOY_BUT ? ref->index : -1;
++#endif
++
+     /* Command Settings */
+     GfOut("Command settings for index %d:\n", player_index);
+     for (int cmd = 0; cmd < NbCmdControl; cmd++) {
+diff --git a/src/libs/tgf/profiler.cpp b/src/libs/tgf/profiler.cpp
+index deb37eb..c12055e 100644
+--- a/src/libs/tgf/profiler.cpp
++++ b/src/libs/tgf/profiler.cpp
+@@ -15,6 +15,7 @@
+  ***************************************************************************/
+ 
+ #ifdef PROFILER
++#include <cassert>
+ 
+ #include <cstring>
+ 
+diff --git a/src/libs/tgfclient/CMakeLists.txt b/src/libs/tgfclient/CMakeLists.txt
+index db56b82..5870f87 100644
+--- a/src/libs/tgfclient/CMakeLists.txt
++++ b/src/libs/tgfclient/CMakeLists.txt
+@@ -75,12 +75,13 @@ IF(WIN32)
+     TARGET_LINK_LIBRARIES(tgfclient winmm)
+ ENDIF(WIN32)
+ 
+-IF(UNIX AND NOT HAIKU)
++# webOS has no X server; the window and its OpenGL ES context come from SDL
++IF(UNIX AND NOT HAIKU AND NOT OPTION_WEBOS)
+     ADD_X11_LIBRARY(tgfclient)
+     IF(OPTION_XRANDR)
+         ADD_XRANDR_LIBRARY(tgfclient)
+     ENDIF(OPTION_XRANDR)
+-ENDIF(UNIX AND NOT HAIKU)
++ENDIF(UNIX AND NOT HAIKU AND NOT OPTION_WEBOS)
+ 
+ IF(UNIX)
+     SD_INSTALL_FILES(LIB lib TARGETS tgfclient)
+diff --git a/src/libs/tgfclient/gui.cpp b/src/libs/tgfclient/gui.cpp
+index 39a6c46..0a2aaaf 100644
+--- a/src/libs/tgfclient/gui.cpp
++++ b/src/libs/tgfclient/gui.cpp
+@@ -1253,7 +1253,9 @@ GfuiInitWindowPositionAndSize(int x, int y, int w, int h)
+ void
+ GfuiSwapBuffers(void)
+ {
++	GfProfStartProfile("swap");
+ 	SDL_GL_SwapWindow(GfuiWindow);
++	GfProfStopProfile("swap");
+ }
+ 
+ void
+diff --git a/src/libs/tgfclient/guieventloop.cpp b/src/libs/tgfclient/guieventloop.cpp
+index 859dd74..7812a40 100644
+--- a/src/libs/tgfclient/guieventloop.cpp
++++ b/src/libs/tgfclient/guieventloop.cpp
+@@ -21,6 +21,9 @@
+ #include "tgf.h"
+ 
+ #include "webserver.h"
++#ifdef WEBOS
++#include <SDL_mixer.h>
++#endif
+ 
+ 
+ 
+@@ -149,12 +152,45 @@ void GfuiEventLoop::operator()()
+ 	static SDL_Keycode keysym = SDLK_UNKNOWN;
+ 
+ 
++#ifdef WEBOS
++	// The remote's Home button leaves the game running behind the launcher or another app. There
++	// it sends GFUIK_PAUSE, which stops a running race as Escape does (the race screen binds it),
++	// pauses the music, draws nothing and leaves the game controller alone (which would otherwise
++	// drive the hidden menus while it drives the TV's), until the game is in front again.
++	static bool bBackground = false;
++	auto setBackground = [this](bool background, const char *why)
++	{
++		if (background == bBackground)
++			return;
++		bBackground = background;
++		GfLogInfo("webOS: %s (%s)\n", background ? "in the background" : "in front again", why);
++		if (background)
++		{
++			injectKeyboardEvent(GFUIK_PAUSE, 0, 0, 0);
++			injectKeyboardEvent(GFUIK_PAUSE, 0, 1, 0);
++			Mix_PauseMusic();
++		}
++		else
++		{
++			Mix_ResumeMusic();
++			postRedisplay();
++		}
++	};
++#endif
++
+ 	// Check for events.
+ 	while (!quitRequested())
+ 	{
+ 		// Loop until there are no events left in the queue.
+ 		while (!quitRequested() && SDL_PollEvent(&event))
+ 		{
++#ifdef WEBOS
++			// The remote's Back button (webosbrew's SDL reports it as scancode 482, the
++			// standard headers having none) is Escape, which leaves menus and pauses a race.
++			if ((event.type == SDL_KEYDOWN || event.type == SDL_KEYUP)
++				&& (event.key.keysym.scancode == 482 || event.key.keysym.sym == SDLK_AC_BACK))
++				event.key.keysym.sym = SDLK_ESCAPE;
++#endif
+ 		    // Process events we care about, and ignore the others.
+ 			switch(event.type)
+ 			{
+@@ -231,11 +267,104 @@ void GfuiEventLoop::operator()()
+ 								_pPrivate->cbReshape(event.window.data1,event.window.data2);
+ 							}
+ 							break;
++#ifdef WEBOS
++						case SDL_WINDOWEVENT_FOCUS_LOST:
++							setBackground(true, "focus lost");
++							break;
++						case SDL_WINDOWEVENT_HIDDEN:
++							setBackground(true, "hidden");
++							break;
++						case SDL_WINDOWEVENT_MINIMIZED:
++							setBackground(true, "minimized");
++							break;
++						case SDL_WINDOWEVENT_FOCUS_GAINED:
++							setBackground(false, "focus gained");
++							break;
++						case SDL_WINDOWEVENT_SHOWN:
++							setBackground(false, "shown");
++							break;
++						case SDL_WINDOWEVENT_RESTORED:
++							setBackground(false, "restored");
++							break;
++#endif
+ 					}
+ 					break;
++#ifdef WEBOS
++				case SDL_APP_WILLENTERBACKGROUND:
++				case SDL_APP_DIDENTERBACKGROUND:
++					setBackground(true, "app in the background");
++					break;
++				case SDL_APP_DIDENTERFOREGROUND:
++					setBackground(false, "app in the foreground");
++					break;
++#endif
+ 			}
+ 		}
+ 
++#ifdef WEBOS
++		// The game controller drives the menus like the remote: the D-pad is the arrows (repeating
++		// while held), Cross [A] is Enter, Options [Start] is Escape (Circle stays free, as Escape
++		// stops a race), Square [X] is ']', the next view in a race. It is polled, as Speed Dreams
++		// turns joystick events off; a race reads the pad on its own, and binds none of these keys
++		// but Enter (Ready, Results), Escape (the stop menu) and ']'.
++		if (!quitRequested() && !bBackground)
++		{
++			static const SDL_GameControllerButton aPadButtons[] = {
++				SDL_CONTROLLER_BUTTON_DPAD_UP, SDL_CONTROLLER_BUTTON_DPAD_DOWN,
++				SDL_CONTROLLER_BUTTON_DPAD_LEFT, SDL_CONTROLLER_BUTTON_DPAD_RIGHT,
++				SDL_CONTROLLER_BUTTON_A, SDL_CONTROLLER_BUTTON_START,
++				SDL_CONTROLLER_BUTTON_X };
++			static const int aPadKeys[] = {
++				SDLK_UP, SDLK_DOWN, SDLK_LEFT, SDLK_RIGHT, SDLK_RETURN, SDLK_ESCAPE,
++				SDLK_RIGHTBRACKET };
++			static const int nPadKeys = sizeof(aPadKeys) / sizeof(aPadKeys[0]);
++			static SDL_GameController* pPad = NULL;
++			static bool bPadInit = false;
++			static unsigned nPadScan = 0;
++			static Uint32 aPadNext[nPadKeys]; // 0: released; else when it repeats next
++			if (!bPadInit)
++				bPadInit = SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) == 0;
++			if (bPadInit && !pPad && nPadScan++ % 120 == 0)
++			{
++				SDL_JoystickUpdate(); // notices a controller that connected meanwhile
++				for (int i = 0; i < SDL_NumJoysticks() && !pPad; i++)
++					if (SDL_IsGameController(i) && (pPad = SDL_GameControllerOpen(i)))
++						GfLogInfo("Menus: game controller %s\n", SDL_GameControllerName(pPad));
++			}
++			if (pPad)
++			{
++				SDL_GameControllerUpdate();
++				const bool bAttached = SDL_GameControllerGetAttached(pPad);
++				const Uint32 now = SDL_GetTicks();
++				for (int i = 0; i < nPadKeys; i++)
++				{
++					const bool bDown = bAttached && SDL_GameControllerGetButton(pPad, aPadButtons[i]);
++					if (bDown && !aPadNext[i])
++					{
++						injectKeyboardEvent(aPadKeys[i], 0, 0, 0);
++						aPadNext[i] = (now + 400) | 1;
++					}
++					else if (bDown && i < 4 && (Sint32)(now - aPadNext[i]) >= 0)
++					{
++						injectKeyboardEvent(aPadKeys[i], 0, 1, 0);
++						injectKeyboardEvent(aPadKeys[i], 0, 0, 0);
++						aPadNext[i] = (now + 120) | 1;
++					}
++					else if (!bDown && aPadNext[i])
++					{
++						injectKeyboardEvent(aPadKeys[i], 0, 1, 0);
++						aPadNext[i] = 0;
++					}
++				}
++				if (!bAttached)
++				{
++					SDL_GameControllerClose(pPad);
++					pPad = NULL;
++				}
++			}
++		}
++#endif
++
+ 		if (!quitRequested())
+ 		{
+ 			double now = GfTimeClock();
+@@ -244,6 +373,14 @@ void GfuiEventLoop::operator()()
+ 			// Recompute if anything to.
+ 			recompute(1000.0 * rate);
+ 
++#ifdef WEBOS
++			if (bBackground)
++			{
++				GfSleep(0.05);
++				continue;
++			}
++#endif
++
+ 			// Redisplay if anything to.
+ 			redisplay();
+ 
+diff --git a/src/libs/tgfclient/guiscreen.cpp b/src/libs/tgfclient/guiscreen.cpp
+index 3f11e4d..2799880 100644
+--- a/src/libs/tgfclient/guiscreen.cpp
++++ b/src/libs/tgfclient/guiscreen.cpp
+@@ -37,6 +37,12 @@
+ 
+ #include "glfeatures.h"
+ 
++#ifdef WEBOS
++// webOS has OpenGL ES only: gl4es (linked as libGL) draws the game's OpenGL 2.1 on an ES 2 context
++// made by SDL, built without its own EGL code, so it gets SDL's GetProcAddress and window size.
++#include <gl4esinit.h>
++#endif
++
+ // The resizable properties.
+ static bool GfScrResizable = false;
+ 
+@@ -342,6 +348,13 @@ static void gfuiInitialWindowedPosition(int displayId, SDL_Window* window )
+     SDL_SetWindowPosition(window, x, y);
+ }
+ 
++#ifdef WEBOS
++static void gfScrGetMainFBSize(int* width, int* height)
++{
++    SDL_GL_GetDrawableSize(GfuiWindow, width, height);
++}
++#endif
++
+ SDL_Surface* gfScrCreateWindow(int nWinWidth, int nWinHeight, int nTotalDepth,int bfVideoMode)
+ {
+     if(GfuiWindow)
+@@ -382,6 +395,17 @@ SDL_Surface* gfScrCreateWindow(int nWinWidth, int nWinHeight, int nTotalDepth,in
+         GfLogError("SDL_GL_CreateContext failed: %s\n", SDL_GetError());
+         return nullptr;
+     }
++#ifdef WEBOS
++    // once: gl4es keeps the ES entry points it finds, which stay valid for a later context
++    static bool gl4esReady = false;
++    if (!gl4esReady)
++    {
++        set_getprocaddress((void *(*)(const char *))SDL_GL_GetProcAddress);
++        set_getmainfbsize(gfScrGetMainFBSize);
++        initialize_gl4es();
++        gl4esReady = true;
++    }
++#endif
+ 
+     // If specified, try best possible settings.
+     PScreenSurface = SDL_CreateRGBSurface(0, nWinWidth, nWinHeight, nTotalDepth,
+@@ -429,6 +453,10 @@ bool GfScrInitSDL2(int nWinWidth, int nWinHeight, int nFullScreen)
+     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
+     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
++#elif defined(WEBOS)
++    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
++    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
++    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+ #else
+     // Version d'OpenGL
+     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+@@ -538,6 +566,23 @@ bool GfScrInitSDL2(int nWinWidth, int nWinHeight, int nFullScreen)
+     // and setup GL Major/Minor before window creation
+     // SDL_GL_SetSwapInterval(1) for for vsync (may have to go AFTER window creation)
+ 
++#ifdef WEBOS
++    // A TV: always the whole screen at its own resolution, and the plain video init, as the
++    // 'best mode' probe opens and closes test windows and may restart the game.
++    {
++        SDL_Rect bounds;
++        if (SDL_GetDisplayBounds(0, &bounds) == 0)
++        {
++            nWinWidth = bounds.w;
++            nWinHeight = bounds.h;
++        }
++        bFullScreen = true;
++        bfVideoMode |= SDL_WINDOW_FULLSCREEN;
++        bTryBestVInitMode = false;
++        GfScrStartDisplayId = 0;
++    }
++#endif
++
+         if (bTryBestVInitMode)
+     {
+         GfLogInfo("Trying 'best possible mode' for video initialization.\n");
+@@ -761,6 +806,10 @@ bool GfScrInitSDL2(int nWinWidth, int nWinHeight, int nFullScreen)
+ bool GfScrInit(int nWinWidth, int nWinHeight, int nFullScreen)
+ {
+     GfScrResizable = GfScrGetResizable();
++#ifdef WEBOS
++    // no windows to resize on a TV
++    GfScrResizable = false;
++#endif
+     if (GfScrResizable)
+         return GfScrInitSDL2();
+     else
+@@ -1256,6 +1305,10 @@ bool GfScrInitSDL2()
+     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
+     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
++#elif defined(WEBOS)
++    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
++    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
++    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+ #else
+     // Version d'OpenGL
+     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+diff --git a/src/main/main.cpp b/src/main/main.cpp
+index 6a2dfbd..6415bc8 100644
+--- a/src/main/main.cpp
++++ b/src/main/main.cpp
+@@ -41,6 +41,108 @@
+ #include <iraceengine.h>
+ #include <iuserinterface.h>
+ 
++#ifdef WEBOS
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <climits>
++#include <vector>
++#include <glob.h>
++#include <unistd.h>
++#include <sys/stat.h>
++
++/*
++ * webOS starts the binary that appinfo.json names as "main" directly, from anywhere, with the app
++ * manager's JSON launch parameters as its one argument; and the luna bus only knows the app by that
++ * executable, so a wrapper script would leave it stuck behind the launch spinner. So the wrapper's
++ * work happens here, before the application parses its options:
++ * - the log goes to /tmp/speed-dreams.log;
++ * - the remote's Back button reaches the game (as Escape) instead of closing the app;
++ * - the libraries, modules and robots are in the app folder, and the data in its data/;
++ * - the user settings, results and replays go to speed-dreams/home on a USB drive when one has a
++ *   speed-dreams folder, so they survive reinstalling the app, or else the app folder's home/;
++ *   a full data set in that folder's data/ (from speed-dreams-data and its car and track
++ *   repositories) replaces the app's own;
++ * - {"startrace": "<race>"} in the launch parameters runs that race (config/raceman/<race>.xml);
++ * - /tmp/speed-dreams.env, if there, sets environment variables for testing, one NAME=value per
++ *   line: gl4es' LIBGL_* options, SD_WEBOS_BENCH (a race starts without waiting for Ready).
++ */
++static std::vector<std::string> WebOSArgs;
++static std::vector<char*> WebOSArgv;
++
++static void webOSStart(int& argc, char**& argv)
++{
++	if (freopen("/tmp/speed-dreams.log", "w", stdout))
++		dup2(fileno(stdout), fileno(stderr));
++	setvbuf(stdout, NULL, _IOLBF, 0);
++
++	setenv("SDL_WEBOS_ACCESS_POLICY_KEYS_BACK", "true", 1);
++
++	if (FILE *env = fopen("/tmp/speed-dreams.env", "r"))
++	{
++		char line[256];
++		while (fgets(line, sizeof(line), env))
++		{
++			line[strcspn(line, "\r\n")] = '\0';
++			char *eq = strchr(line, '=');
++			if (line[0] != '#' && eq && eq != line)
++			{
++				*eq = '\0';
++				setenv(line, eq + 1, 1);
++				printf("webOS: %s=%s\n", line, eq + 1);
++			}
++		}
++		fclose(env);
++	}
++
++	char exe[PATH_MAX];
++	ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
++	std::string app = ".";
++	if (n > 0)
++	{
++		exe[n] = '\0';
++		app = exe;
++		app.erase(app.rfind('/'));
++	}
++
++	std::string data = app + "/data/", home = app + "/home/";
++	glob_t g;
++	if (glob("/tmp/usb/*/*/speed-dreams", GLOB_ONLYDIR, NULL, &g) == 0 && g.gl_pathc > 0)
++	{
++		const std::string usb = g.gl_pathv[0];
++		home = usb + "/home/";
++		struct stat st;
++		if (stat((usb + "/data/config/raceengine.xml").c_str(), &st) == 0)
++			data = usb + "/data/";
++	}
++	globfree(&g);
++	mkdir(home.c_str(), 0775);
++	printf("webOS: app %s, data %s, home %s\n", app.c_str(), data.c_str(), home.c_str());
++
++	WebOSArgs = { argv[0], "--localdir", home, "--datadir", data,
++		"--libdir", app + "/", "--bindir", app + "/" };
++	// the app manager's JSON parameters are not options, but may name a race to run; anything
++	// else is kept
++	for (int i = 1; i < argc; i++)
++		if (argv[i][0] != '{')
++			WebOSArgs.push_back(argv[i]);
++		else if (const char *k = strstr(argv[i], "\"startrace\""))
++		{
++			const char *b = strchr(k + 11, '"'), *e = b ? strchr(b + 1, '"') : NULL;
++			if (e)
++			{
++				WebOSArgs.push_back("--startrace");
++				WebOSArgs.push_back(std::string(b + 1, e));
++			}
++		}
++	for (auto& s : WebOSArgs)
++		WebOSArgv.push_back(&s[0]);
++	WebOSArgv.push_back(NULL);
++	argc = (int)WebOSArgs.size();
++	argv = WebOSArgv.data();
++}
++#endif
++
+ // If defined in tgf.h:
+ // Use new Memory Manager ...
+ #ifdef __DEBUG_MEMORYMANAGER__
+@@ -126,6 +228,10 @@ main(int argc, char *argv[])
+ #endif
+ // ... Use new Memeory Manager
+ 
++#ifdef WEBOS
++	webOSStart(argc, argv);
++#endif
++
+ 	// Look for the "text-only" option flag in the command-line args.
+ 	bool bTextOnly = false;
+ 	for (int i = 1; i < argc; i++)
+diff --git a/src/modules/graphic/ssggraph/grcar.cpp b/src/modules/graphic/ssggraph/grcar.cpp
+index 8b71c08..2b96b11 100644
+--- a/src/modules/graphic/ssggraph/grcar.cpp
++++ b/src/modules/graphic/ssggraph/grcar.cpp
+@@ -1537,8 +1537,14 @@ grDrawCar(tSituation *s, tCarElt *car, tCarElt *curCar, int dispCarFlag, int dis
+             //grCarInfo[index].DRMSelector->select(0);
+             if (grCarInfo[index].nDRM > 0)
+                 grCarInfo[index].DRMSelector->select(0);
++#ifndef WEBOS
++            // From inside, the high detail wheel, which may come with the driver's arms
+             if (grCarInfo[index].nSteer > 1)
+                 grCarInfo[index].steerSelector->select(2);
++#else
++            // From inside, the plain wheel: on a TV the arms turning across the view distract
++            grCarInfo[index].steerSelector->select(1);
++#endif
+         }
+ 
+         if (dispDrvFlag || car != curCar)
+diff --git a/src/modules/graphic/ssggraph/grmain.cpp b/src/modules/graphic/ssggraph/grmain.cpp
+index 6ea3f87..7285e6d 100644
+--- a/src/modules/graphic/ssggraph/grmain.cpp
++++ b/src/modules/graphic/ssggraph/grmain.cpp
+@@ -504,6 +504,27 @@ gr1stPersonView(void *)
+     grSelectCamera(0);
+ }
+ 
++#ifdef WEBOS
++// The game controller's Square (sent as ']') steps through the views worth driving with: the
++// driver's eye, the bonnet, the road ahead, then the chase cameras, near to far ('[' goes back).
++static const int grDrivingViews[][2] = { {0, 0}, {0, 2}, {0, 3}, {1, 3}, {1, 0}, {1, 1} };
++static const int grNbDrivingViews = sizeof(grDrivingViews) / sizeof(grDrivingViews[0]);
++
++static void
++grStepView(void *vp)
++{
++    cGrScreen *scr = grGetCurrentScreen();
++    const int step = vp ? 1 : -1;
++    int cur = -1;
++    for (int i = 0; i < grNbDrivingViews; i++)
++        if (grDrivingViews[i][0] == scr->getCurCamHead() && grDrivingViews[i][1] == scr->getNthCamera())
++            cur = i;
++    const int next = cur < 0 ? (step > 0 ? 0 : grNbDrivingViews - 1)
++                             : (cur + step + grNbDrivingViews) % grNbDrivingViews;
++    scr->selectNthCamera(grDrivingViews[next][0], grDrivingViews[next][1]);
++}
++#endif
++
+ static void
+ gr3rdPersonView(void *)
+ {
+@@ -697,6 +718,10 @@ initView(int x, int y, int width, int height, int /* flag */, void *screen)
+     GfuiAddKey(screen, GFUIK_PAGEDOWN, "Select Next Car",     (void*)0, grNextCar, NULL);
+ 
+     GfuiAddKey(screen, GFUIK_F2,       "1st Person Views",  NULL, gr1stPersonView, NULL);
++#ifdef WEBOS
++    GfuiAddKey(screen, ']',            "Next view",         (void*)1, grStepView, NULL);
++    GfuiAddKey(screen, '[',            "Previous view",     (void*)0, grStepView, NULL);
++#endif
+     GfuiAddKey(screen, GFUIK_F3,       "3rd Person Views",  NULL, gr3rdPersonView, NULL);
+     GfuiAddKey(screen, GFUIK_F4,       "Side Car Views",    NULL, grSideCarView, NULL);
+     GfuiAddKey(screen, GFUIK_F5,       "Up Car View",       NULL, grUpCarView, NULL);
+@@ -757,6 +782,14 @@ refresh(tSituation *s)
+         frameInfo.fInstFps = frameInfo.nInstFrames / dDeltaTime;
+         frameInfo.nInstFrames = 0;
+         frameInfo.fAvgFps = (double)frameInfo.nTotalFrames / nFPSTotalSeconds;
++#ifdef WEBOS
++        if (nFPSTotalSeconds % 5 == 0)
++            GfLogInfo("webOS: %.1f fps (%.1f on average)\n", frameInfo.fInstFps, frameInfo.fAvgFps);
++#ifdef PROFILER
++        if (nFPSTotalSeconds % 30 == 0)
++            GfProfPrintReport();
++#endif
++#endif
+     }
+ 
+     TRACE_GL("refresh: start");
+diff --git a/src/modules/graphic/ssggraph/grscreen.cpp b/src/modules/graphic/ssggraph/grscreen.cpp
+index a3bd336..7aa89d1 100644
+--- a/src/modules/graphic/ssggraph/grscreen.cpp
++++ b/src/modules/graphic/ssggraph/grscreen.cpp
+@@ -390,6 +390,118 @@ void cGrScreen::camDraw(tSituation *s)
+ 
+ 
+ /* Update screen display */
++#ifdef WEBOS
++// The TV's Mali-G51 cannot fill 1080p with this scene at a playable rate: the 3D view is drawn at a
++// lower height (graph.xml's "render height" in the Graphic section, 720 by default; 0 for the full
++// screen) into a texture, which then fills the screen. The mirror, boards and menus are drawn
++// afterwards, at the full resolution.
++static GLuint grRenderFbo = 0, grRenderTex = 0, grRenderDepth = 0;
++static int grRenderW = 0, grRenderH = 0;
++static bool grRenderFailed = false;
++
++static bool grRenderTargetBegin(int scrw, int scrh)
++{
++    const int h = (int)GfParmGetNum(grHandle, GR_SCT_GRAPHIC, "render height", NULL, 720);
++    if (grRenderFailed || h <= 0 || h >= scrh)
++        return false;
++    const int w = (scrw * h / scrh + 1) & ~1;
++    if (w != grRenderW || h != grRenderH)
++    {
++        if (!grRenderFbo)
++        {
++            glGenFramebuffers(1, &grRenderFbo);
++            glGenTextures(1, &grRenderTex);
++            glGenRenderbuffers(1, &grRenderDepth);
++        }
++        glActiveTexture(GL_TEXTURE0);
++        glBindTexture(GL_TEXTURE_2D, grRenderTex);
++        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
++        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
++        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
++        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
++        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
++        glBindTexture(GL_TEXTURE_2D, 0);
++        glBindRenderbuffer(GL_RENDERBUFFER, grRenderDepth);
++        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
++        glBindRenderbuffer(GL_RENDERBUFFER, 0);
++        glBindFramebuffer(GL_FRAMEBUFFER, grRenderFbo);
++        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, grRenderTex, 0);
++        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, grRenderDepth);
++        const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
++        glBindFramebuffer(GL_FRAMEBUFFER, 0);
++        if (status != GL_FRAMEBUFFER_COMPLETE)
++        {
++            GfLogError("webOS: no %dx%d render target (status 0x%x); drawing at full size\n", w, h, status);
++            grRenderFailed = true;
++            return false;
++        }
++        GfLogInfo("webOS: the 3D view is drawn at %dx%d\n", w, h);
++        grRenderW = w;
++        grRenderH = h;
++    }
++    glBindFramebuffer(GL_FRAMEBUFFER, grRenderFbo);
++    glViewport(0, 0, grRenderW, grRenderH);
++    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
++    return true;
++}
++
++// Stretches the drawn view over the screen. PLIB's cached GL state is reset by its next
++// ssgCullAndDraw, and the boards set what they use.
++static void grRenderTargetEnd(int scrx, int scry, int scrw, int scrh)
++{
++    glBindFramebuffer(GL_FRAMEBUFFER, 0);
++    glViewport(scrx, scry, scrw, scrh);
++
++    glMatrixMode(GL_TEXTURE);
++    glPushMatrix();
++    glLoadIdentity();
++    glMatrixMode(GL_PROJECTION);
++    glPushMatrix();
++    glLoadIdentity();
++    glOrtho(0, 1, 0, 1, -1, 1);
++    glMatrixMode(GL_MODELVIEW);
++    glPushMatrix();
++    glLoadIdentity();
++
++    glDisable(GL_DEPTH_TEST);
++    glDisable(GL_LIGHTING);
++    glDisable(GL_FOG);
++    glDisable(GL_BLEND);
++    glDisable(GL_ALPHA_TEST);
++    glDisable(GL_CULL_FACE);
++    glDisable(GL_COLOR_MATERIAL);
++    for (int unit = grMaxTextureUnits - 1; unit > 0; unit--)
++    {
++        glActiveTexture(GL_TEXTURE0 + unit);
++        glDisable(GL_TEXTURE_2D);
++    }
++    glActiveTexture(GL_TEXTURE0);
++    glDisable(GL_TEXTURE_GEN_S);
++    glDisable(GL_TEXTURE_GEN_T);
++    glEnable(GL_TEXTURE_2D);
++    glBindTexture(GL_TEXTURE_2D, grRenderTex);
++    glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
++    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
++    glBegin(GL_TRIANGLE_STRIP);
++    glTexCoord2f(0, 0); glVertex2f(0, 0);
++    glTexCoord2f(1, 0); glVertex2f(1, 0);
++    glTexCoord2f(0, 1); glVertex2f(0, 1);
++    glTexCoord2f(1, 1); glVertex2f(1, 1);
++    glEnd();
++    glBindTexture(GL_TEXTURE_2D, 0);
++    glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
++
++    glMatrixMode(GL_MODELVIEW);
++    glPopMatrix();
++    glMatrixMode(GL_PROJECTION);
++    glPopMatrix();
++    glMatrixMode(GL_TEXTURE);
++    glPopMatrix();
++    glMatrixMode(GL_MODELVIEW);
++    glEnable(GL_DEPTH_TEST);
++}
++#endif
++
+ void cGrScreen::update(tSituation *s, const cGrFrameInfo* frameInfo)
+ {
+     if (!active)
+@@ -451,13 +563,24 @@ void cGrScreen::update(tSituation *s, const cGrFrameInfo* frameInfo)
+     {
+         glViewport(scrx, scry, scrw, scrh);
+         dispCam = curCam;
++#ifdef WEBOS
++        const bool bScaled = grRenderTargetBegin(scrw, scrh);
++#endif
++        GfProfStartProfile("camDraw main");
+         camDraw(s);
++        GfProfStopProfile("camDraw main");
++#ifdef WEBOS
++        if (bScaled)
++            grRenderTargetEnd(scrx, scry, scrw, scrh);
++#endif
+     }
+ 
+     /* Mirror */
+     if (mirrorFlag && curCam->isMirrorAllowed ()) {
+         dispCam = mirrorCam;
++        GfProfStartProfile("camDraw mirror");
+         camDraw (s);
++        GfProfStopProfile("camDraw mirror");
+     }
+ 
+     glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+diff --git a/src/modules/userinterface/legacymenu/mainscreens/downloadsmenu.cpp b/src/modules/userinterface/legacymenu/mainscreens/downloadsmenu.cpp
+index 5eff0cc..279c245 100644
+--- a/src/modules/userinterface/legacymenu/mainscreens/downloadsmenu.cpp
++++ b/src/modules/userinterface/legacymenu/mainscreens/downloadsmenu.cpp
+@@ -373,17 +373,31 @@ void DownloadsMenu::recompute(unsigned ms)
+     {
+         double now = GfTimeClock();
+         CURLMcode code = curl_multi_perform(multi, &running);
++#ifdef WEBOS
++        // webOS 6 has libcurl 7.61, and curl_multi_poll came in 7.66 (nothing here wakes it up).
++        // curl_multi_wait returns at once when it has nothing to wait on, where curl_multi_poll
++        // would sleep the timeout out, so that sleep is done here.
++        int numfds = 0;
++#endif
+ 
+         if (code != CURLM_OK)
+         {
+             GfLogError("curl_multi_perform: %s\n", curl_multi_strerror(code));
+             return;
+         }
++#ifdef WEBOS
++        else if ((code = curl_multi_wait(multi, NULL, 0, (int)msd, &numfds)) != CURLM_OK)
++#else
+         else if ((code = curl_multi_poll(multi, NULL, 0, msd, 0)) != CURLM_OK)
++#endif
+         {
+             GfLogError("curl_multi_poll: %s\n", curl_multi_strerror(code));
+             return;
+         }
++#ifdef WEBOS
++        if (!numfds && msd >= 1)
++            GfSleep(msd / 1000.0);
++#endif
+ 
+         double elapsed = (GfTimeClock() - now) * 1000.0;
+ 
+diff --git a/src/modules/userinterface/legacymenu/racescreens/racerunningmenus.cpp b/src/modules/userinterface/legacymenu/racescreens/racerunningmenus.cpp
+index 6638db0..70da39d 100644
+--- a/src/modules/userinterface/legacymenu/racescreens/racerunningmenus.cpp
++++ b/src/modules/userinterface/legacymenu/racescreens/racerunningmenus.cpp
+@@ -619,6 +619,17 @@ rmOpenHelpScreen(void * /* dummy */)
+ 	GfuiHelpScreen(rmScreenHandle, RmBackToRaceHookInit());
+ }
+ 
++#ifdef WEBOS
++// The game went into the background (the remote's Home button): a running race stops, as with
++// Escape, and waits in the stop menu.
++static void
++rmOnBackground(void *)
++{
++	if (!rmRacePaused && !rmPreRacePause)
++		rmStateStop(NULL);
++}
++#endif
++
+ static void
+ rmAddKeys()
+ {
+@@ -632,6 +643,9 @@ rmAddKeys()
+ 
+     GfuiAddKey(rmScreenHandle, 'p', "Pause Race",        (void*)0, rmRacePause, NULL);
+     GfuiAddKey(rmScreenHandle, GFUIK_ESCAPE,  "Stop current race", NULL, rmStateStop, NULL);
++#ifdef WEBOS
++    GfuiAddKey(rmScreenHandle, GFUIK_PAUSE,  "Stop the race (in the background)", NULL, rmOnBackground, NULL);
++#endif
+     GfuiAddKey(rmScreenHandle, 'q', GFUIM_ALT, "Quit (without saving)", NULL, rmStateExit, NULL);
+     GfuiAddKey(rmScreenHandle, ' ', "Skip pre-start",    (void*)0, rmSkipPreStart, NULL);
+ 
+@@ -769,6 +783,12 @@ RmAddPreRacePauseItems()
+       {
+          LegacyMenu::self().soundEngine()->mute(true);
+       }
++
++#ifdef WEBOS
++      // A benchmark run (SD_WEBOS_BENCH in the environment) starts without waiting
++      if (getenv("SD_WEBOS_BENCH"))
++         RmReadyToRace(NULL);
++#endif
+    }
+ }
+ 
